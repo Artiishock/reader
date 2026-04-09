@@ -1,0 +1,17 @@
+// Опубликуйте в Firebase Console → Storage → Правила.
+// Читатели скачивают файлы любых авторов; загружать в свою папку может только писатель (роль в Firestore users/{uid}).
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isWriter() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'writer';
+    }
+
+    match /users/{userId}/books/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId && isWriter();
+    }
+  }
+}
