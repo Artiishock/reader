@@ -19,11 +19,49 @@ const FONT_MIN = 0.75;
 const FONT_MAX = 1.75;
 const FONT_STEP = 0.1;
 
+// flip-page__header: font 0.78rem + padding-bottom 0.65rem + margin-bottom 1.25rem + border ≈ 48px
+const PAGE_HEADER_H = 48;
+
+/**
+ * Calculate words per page from the actual measured flip-page element dimensions.
+ * Accounts for: header, padding, line-height, and paragraph bottom margins (1em each).
+ */
+function calcWordsPerPage(pageWidth, pageHeight, fontScale) {
+  if (!pageWidth || !pageHeight) return 180;
+
+  const fontPx = 18 * fontScale;
+  const lineH = fontPx * 1.72;
+
+  // Padding inside flip-page: clamp(0.75rem, 3vw, 2rem) top+bottom, clamp(0.85rem, 4vw, 2.75rem) left+right
+  const padV = Math.max(12, Math.min(32, pageWidth * 0.03)) * 2;
+  const padH = Math.max(13.6, Math.min(44, pageWidth * 0.04)) * 2;
+
+  const textW = pageWidth - padH;
+  const textHraw = pageHeight - PAGE_HEADER_H - padV;
+
+  // Words per line: ~0.52em per char for Literata, ~5.5 chars/word average
+  const wordsPerLine = (textW / (fontPx * 0.52)) / 5.5;
+
+  // Rough first-pass estimate to know how many paragraphs (~40 words each) we'll have
+  const roughLines = textHraw / lineH;
+  const roughWords = roughLines * wordsPerLine;
+  const estParas = roughWords / 40;
+  // Each paragraph has margin-bottom: 1em
+  const paraMarginH = estParas * fontPx;
+
+  const textH = textHraw - paraMarginH;
+  const lines = Math.floor(textH / lineH);
+
+  // 0.85 safety margin to absorb rounding and variable word lengths
+  return Math.max(40, Math.floor(lines * wordsPerLine * 0.85));
+}
+
 const BookReader = () => {
   const { bookId } = useParams();
   const { currentUser } = useAuth();
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [rawText, setRawText] = useState('');
   const [pages, setPages] = useState([]);
   const [title, setTitle] = useState('Книга');
   const [error, setError] = useState('');
@@ -32,6 +70,27 @@ const BookReader = () => {
     if (!Number.isFinite(raw)) return 1;
     return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(raw * 100) / 100));
   });
+
+  // Actual flip-page element dimensions reported by FlipBook via onPageDimsChange
+  const [pageDims, setPageDims] = useState({ width: 0, height: 0 });
+
+  const wordsPerPage = useMemo(
+    () => calcWordsPerPage(pageDims.width, pageDims.height, fontScale),
+    [pageDims, fontScale]
+  );
+
+  // Re-paginate whenever raw text or words-per-page changes
+  useEffect(() => {
+    if (!rawText) return;
+    const prevTotal = pages.length || 1;
+    const prevPage = currentPage;
+    const newPages = paginateText(rawText, wordsPerPage);
+    const fraction = (prevPage - 1) / prevTotal;
+    const restored = Math.max(1, Math.min(newPages.length, Math.round(fraction * newPages.length) + 1));
+    setPages(newPages);
+    setCurrentPage(restored);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawText, wordsPerPage]);
 
   useEffect(() => {
     localStorage.setItem(FONT_SCALE_KEY, String(fontScale));
@@ -64,13 +123,12 @@ const BookReader = () => {
 
         if (!snap.exists()) {
           setError('Книга не найдена.');
-          setPages([]);
+          setRawText('');
           setLoading(false);
           return;
         }
 
         const data = snap.data();
-
         setTitle(data.title || data.originalName || 'Книга');
 
         let raw;
@@ -92,16 +150,15 @@ const BookReader = () => {
         }
 
         const text = String(raw).replace(/\r\n/g, '\n');
-        const paginated = paginateText(text, 260);
 
         if (cancelled) return;
-        setPages(paginated);
+        setRawText(text);
 
         const progRef = doc(db, 'readingProgress', progressId(currentUser.uid, bookId));
         const progSnap = await getDoc(progRef);
         if (progSnap.exists()) {
           const saved = progSnap.data().page;
-          if (typeof saved === 'number' && saved >= 1 && saved <= paginated.length) {
+          if (typeof saved === 'number' && saved >= 1) {
             setCurrentPage(saved);
           } else {
             setCurrentPage(1);
@@ -228,10 +285,11 @@ const BookReader = () => {
 
       <FlipBook
         pages={pages}
-        page={currentPage}
+        page={Math.min(currentPage, pages.length)}
         onPageCommitted={handlePageCommitted}
         bookTitle={title}
         readerFontScale={fontScale}
+        onPageDimsChange={setPageDims}
       />
     </div>
   );

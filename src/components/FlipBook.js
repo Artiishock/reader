@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 function PageBody({ text }) {
   const blocks = text.split('\n\n').filter(Boolean);
@@ -21,12 +21,24 @@ function PageBody({ text }) {
 /**
  * 3D page turn: top sheet peels away to reveal the next (or previous) page.
  */
-export default function FlipBook({ pages, page, onPageCommitted, bookTitle, readerFontScale = 1 }) {
+export default function FlipBook({ pages, page, onPageCommitted, bookTitle, readerFontScale = 1, onPageDimsChange }) {
   const total = pages.length;
   const scaleStyle = { '--reader-font-scale': String(readerFontScale) };
   const [anim, setAnim] = useState(null);
   const live = useRef({ page, anim, total });
   live.current = { page, anim, total };
+
+  // Measure the actual page element so BookReader can compute words-per-page accurately
+  const pageRef = useRef(null);
+  useLayoutEffect(() => {
+    const el = pageRef.current;
+    if (!el || !onPageDimsChange) return;
+    const ro = new ResizeObserver(() => {
+      onPageDimsChange({ width: el.clientWidth, height: el.clientHeight });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onPageDimsChange]);
 
   const commitNext = useCallback(() => {
     if (page < total) onPageCommitted(page + 1);
@@ -73,6 +85,7 @@ export default function FlipBook({ pages, page, onPageCommitted, bookTitle, read
         <div className="flip-book__chrome">
           <div className="flip-book__spine" aria-hidden />
           <div
+            ref={pageRef}
             className="flip-page flip-page--single"
             role="article"
             aria-label={`Страница ${page} из ${total}`}
